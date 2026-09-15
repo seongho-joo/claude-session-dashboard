@@ -333,6 +333,14 @@ input[type="search"]:focus, select:focus { outline: 2px solid var(--accent); out
   color: var(--ink-soft);
 }
 
+.named {
+  font-family: var(--f-mono);
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.named + * { color: var(--muted); }
+
 .pill.expired {
   background: var(--busy-soft);
   color: var(--busy);

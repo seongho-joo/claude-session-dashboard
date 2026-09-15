@@ -210,9 +210,17 @@ function renderLive() {
 
 /* ---------------- sessions ---------------- */
 
+// A session the user named with /rename leads with that name; the derived
+// title still follows when it says something different.
+function sessionLabel(s) {
+  const named = s.name ? `<span class="named">${esc(s.name)}</span>` : "";
+  const title = !s.name || s.name !== s.title ? esc(s.title) : "";
+  return [named, title].filter(Boolean).join(" ");
+}
+
 function sessionRow(s) {
   return `<button class="row" data-session="${esc(s.sessionId)}">
-    <div class="row-title">${esc(s.title)}${s.archived ? ' <span class="pill expired">원본 만료</span>' : ""}</div>
+    <div class="row-title">${sessionLabel(s)}${s.archived ? ' <span class="pill expired">원본 만료</span>' : ""}</div>
     <div class="row-meta">
       <span class="pill">${esc(s.project)}</span>
       <span>${esc(s.branch || "—")}</span>
@@ -276,7 +284,7 @@ async function runSearch() {
     ? `<div class="rows">${data.results
         .map(
           (r) => `<button class="row" data-session="${esc(r.sessionId)}">
-            <div class="row-title">${esc(r.title)}</div>
+            <div class="row-title">${sessionLabel(r)}</div>
             <div class="row-meta">
               <span class="pill">${esc(r.project)}</span>
               <span>${esc(r.branch || "—")}</span>
@@ -303,7 +311,8 @@ async function openDetail(sessionId) {
 
   const data = await api(`/api/sessions/${encodeURIComponent(sessionId)}`);
   const s = data.summary;
-  $("#detail-title").textContent = s.title;
+  $("#detail-title").textContent =
+    s.name && s.name !== s.title ? `${s.name} — ${s.title}` : s.name || s.title;
 
   const expired = data.expired;
   const ratio = pct(s.contextTokens, s.contextLimit);

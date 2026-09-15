@@ -25,7 +25,7 @@ PROJECTS_DIR = CLAUDE_DIR / "projects"
 # it is durable data, not a cache — it does not belong under ~/.cache.
 STORE_PATH = Path.home() / ".local" / "share" / "cc-dashboard" / "index.json"
 LEGACY_CACHE_PATH = Path.home() / ".cache" / "cc-dashboard" / "index.json"
-CACHE_VERSION = 3
+CACHE_VERSION = 4
 
 LOCAL_TZ = ZoneInfo("Asia/Seoul")
 
@@ -226,6 +226,7 @@ def summarize(path: Path) -> dict | None:
     daily: dict[str, dict] = {}
 
     title = None
+    name = None
     first_prompt = None
     last_prompt = None
     cwd = branch = version = entrypoint = None
@@ -241,6 +242,11 @@ def summarize(path: Path) -> dict | None:
 
         if kind == "ai-title":
             title = entry.get("aiTitle") or title
+            continue
+        if kind in ("custom-title", "agent-name"):
+            # `/rename` writes both. Unlike the live registry, which disappears
+            # with the process, this survives in the transcript.
+            name = entry.get("customTitle") or entry.get("agentName") or name
             continue
         if kind == "last-prompt":
             last_prompt = clean_prompt(entry.get("lastPrompt") or "") or last_prompt
@@ -303,8 +309,8 @@ def summarize(path: Path) -> dict | None:
             for block in blocks(message):
                 block_type = block.get("type")
                 if block_type == "tool_use":
-                    name = block.get("name") or "unknown"
-                    tools[name] = tools.get(name, 0) + 1
+                    tool_name = block.get("name") or "unknown"
+                    tools[tool_name] = tools.get(tool_name, 0) + 1
                     tool_calls += 1
                     if day:
                         daily[day]["tools"] += 1
@@ -330,12 +336,13 @@ def summarize(path: Path) -> dict | None:
     duration = int((ended - started).total_seconds()) if started and ended else 0
 
     stat = path.stat()
-    preview = (title or first_prompt or "").strip().replace("\n", " ")
+    preview = (title or first_prompt or name or "").strip().replace("\n", " ")
 
     return {
         "sessionId": session_id,
         "path": str(path),
         "title": preview[:120] or "(제목 없음)",
+        "name": name,
         "aiTitle": title,
         "firstPrompt": first_prompt,
         "lastPrompt": (last_prompt or "").strip()[:300] or None,
@@ -401,8 +408,12 @@ def _load_store() -> dict:
             stored = json.loads(source.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
+        files = stored.get("files", {})
         if stored.get("version") == CACHE_VERSION:
-            return stored.get("files", {})
+            return files
+        # Older layout. Live summaries are reparsed from their transcripts
+        # anyway, but archived ones are the only copy left — carry them over.
+        return {key: value for key, value in files.items() if value.get("archived")}
     return {}
 
 

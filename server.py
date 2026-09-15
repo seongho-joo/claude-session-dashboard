@@ -88,6 +88,7 @@ def filter_sessions(sessions: list[dict], params: dict) -> list[dict]:
             s
             for s in out
             if term in (s.get("title") or "").lower()
+            or term in (s.get("name") or "").lower()
             or term in (s.get("branch") or "").lower()
             or term in (s.get("firstPrompt") or "").lower()
         ]
@@ -169,6 +170,7 @@ class Handler(BaseHTTPRequestHandler):
                         "peak": summary["contextPeak"],
                     }
                     session["title"] = summary["title"]
+                    session["name"] = session.get("name") or summary.get("name")
                     session["branch"] = summary["branch"]
                     session["lastPrompt"] = summary["lastPrompt"]
                     session["toolCalls"] = summary["toolCalls"]
