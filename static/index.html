@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>세션 대시보드</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <span class="dot" id="conn" title="SSE 연결"></span>
+        세션 대시보드
+      </div>
+      <div class="topbar-stat" id="topstat">인덱싱 중…</div>
+      <nav class="tabs" role="tablist">
+        <button class="tab" role="tab" data-tab="live" aria-selected="true">Live</button>
+        <button class="tab" role="tab" data-tab="sessions" aria-selected="false">Sessions</button>
+        <button class="tab" role="tab" data-tab="activity" aria-selected="false">Activity</button>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="view" id="view-live">
+      <div class="view-head">
+        <h1>살아있는 세션</h1>
+        <span class="hint" id="live-hint"></span>
+      </div>
+      <div class="cards" id="live-cards"></div>
+    </section>
+
+    <section class="view" id="view-sessions" hidden>
+      <div class="view-head">
+        <h1>세션</h1>
+        <span class="hint" id="sessions-hint"></span>
+      </div>
+      <div class="controls">
+        <div class="seg">
+          <button id="mode-filter" aria-pressed="true">목록 필터</button>
+          <button id="mode-search" aria-pressed="false">본문 검색</button>
+        </div>
+        <input type="search" id="q" placeholder="제목·브랜치로 거르기" autocomplete="off">
+        <select id="project"><option value="">모든 프로젝트</option></select>
+        <select id="days">
+          <option value="">전체 기간</option>
+          <option value="1">최근 1일</option>
+          <option value="7">최근 7일</option>
+          <option value="30">최근 30일</option>
+        </select>
+        <label class="check"><input type="checkbox" id="nonempty" checked> 빈 세션 숨기기</label>
+      </div>
+      <div id="sessions-body"></div>
+    </section>
+
+    <section class="view" id="view-detail" hidden>
+      <div class="view-head">
+        <button class="back" id="back">← 목록</button>
+        <h1 id="detail-title"></h1>
+      </div>
+      <div id="detail-body"></div>
+    </section>
+
+    <section class="view" id="view-activity" hidden>
+      <div class="view-head">
+        <h1>활동</h1>
+        <span class="hint" id="activity-hint"></span>
+      </div>
+      <div id="activity-body"></div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
