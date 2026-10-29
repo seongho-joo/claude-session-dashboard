@@ -21,6 +21,9 @@ const esc = (value) =>
 
 const int = (n) => (n ?? 0).toLocaleString("ko-KR");
 
+const money = (n) =>
+  n == null ? "—" : n >= 10 ? `$${Math.round(n).toLocaleString("ko-KR")}` : `$${n.toFixed(2)}`;
+
 function tokens(n) {
   n = n ?? 0;
   if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M";
@@ -328,6 +331,11 @@ async function openDetail(sessionId) {
     ["캐시 읽기", tokens(s.tokens.cacheRead), `생성 ${tokens(s.tokens.cacheCreation)}`],
     ["메시지", int(s.userMsgs + s.assistantMsgs), `프롬프트 ${int(s.userMsgs)}`],
     ["툴 호출", int(s.toolCalls), `서브에이전트 ${int(s.subagents)}`],
+    [
+      "비용",
+      money(s.costUSD),
+      s.costUSD == null ? "기록 없음" : "Claude Code 정산",
+    ],
     ["활성 시간", duration(s.activeSec), `전체 ${duration(s.durationSec)}`],
   ];
 
@@ -342,7 +350,10 @@ async function openDetail(sessionId) {
       )
       .join("")}</div>
 
-    <p class="hint mono">${esc(s.project)} · ${esc(s.branch || "브랜치 없음")} · v${esc(s.version)} · ${clock(s.start)} → ${clock(s.end)} · ${esc(s.sessionId)}</p>
+    <p class="hint mono">${esc(s.modelId || Object.keys(s.models)[0] || "model?")} · ${esc(s.project)} · ${esc(s.branch || "브랜치 없음")} · v${esc(s.version)} · ${clock(s.start)} → ${clock(s.end)}</p>
+    <p class="hint mono">${esc(s.sessionId)}${
+      s.tokenSource === "computed" ? " · 토큰은 트랜스크립트에서 재구성한 추정치" : ""
+    }</p>
 
     ${
       expired
@@ -421,6 +432,7 @@ async function loadActivity() {
     ["서브에이전트", int(t.subagents), "누적"],
     ["아카이브", int(t.archived), t.archived ? "원본 만료됨" : "아직 없음"],
     ["출력 토큰", tokens(t.output), int(t.output)],
+    ["비용", money(t.costUSD), `${int(t.costed)}개 세션에 기록됨`],
   ];
 
   $("#activity-body").innerHTML = `
@@ -442,8 +454,12 @@ async function loadActivity() {
 
     <div class="two-col">
       <div>
-        <h2>프로젝트 · 세션 수</h2>
-        <div class="panel">${barList(data.projects.slice(0, 10), "sessions")}</div>
+        <h2>프로젝트 · 비용</h2>
+        <div class="panel">${barList(
+          data.projects.filter((p) => p.cost > 0).slice(0, 10),
+          "cost",
+          money
+        )}</div>
       </div>
       <div>
         <h2>브랜치 · 활성 시간</h2>

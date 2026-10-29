@@ -25,7 +25,7 @@ PROJECTS_DIR = CLAUDE_DIR / "projects"
 # it is durable data, not a cache — it does not belong under ~/.cache.
 STORE_PATH = Path.home() / ".local" / "share" / "cc-dashboard" / "index.json"
 LEGACY_CACHE_PATH = Path.home() / ".cache" / "cc-dashboard" / "index.json"
-CACHE_VERSION = 4
+CACHE_VERSION = 5
 
 LOCAL_TZ = ZoneInfo("Asia/Seoul")
 
@@ -35,6 +35,13 @@ ACTIVE_GAP_SECONDS = 300
 
 SMALL_CONTEXT = 200_000
 LARGE_CONTEXT = 1_000_000
+
+_COST_STATE_KEYS = {
+    "input": "inputTokens",
+    "output": "outputTokens",
+    "cacheRead": "cacheReadInputTokens",
+    "cacheCreation": "cacheCreationInputTokens",
+}
 
 _TOKEN_KEYS = (
     ("input", "input_tokens"),
@@ -151,11 +158,20 @@ def response_id(entry: dict) -> str:
     """Identity of the API response an assistant entry belongs to.
 
     Claude Code writes one entry per content block — thinking, text, each
-    tool_use — and repeats the full usage on every one of them. Everything
-    that counts a response or its tokens must collapse on this id first.
+    tool_use — and rewrites `usage` on each as the response streams, so the
+    entries for one id read 6, 6, 334. Collapse on this id and keep the
+    largest reading: summing every line multiplies, taking the first truncates.
     """
     message = entry.get("message") or {}
     return message.get("id") or entry.get("requestId") or entry.get("uuid") or ""
+
+
+def context_limit_for(model_ids) -> int | None:
+    """1M only when a model id says so. `message.model` never carries `[1m]`."""
+    for model_id in model_ids:
+        if model_id and "[1m]" in model_id:
+            return LARGE_CONTEXT
+    return None
 
 
 def context_size(usage: dict) -> int:
@@ -197,7 +213,7 @@ def _scan_subagents(path: Path) -> dict:
         count += 1
 
     for transcript in sorted(directory.glob("agent-*.jsonl")):
-        counted: set[str] = set()
+        final: dict[str, tuple[dict, str | None]] = {}
         for entry in iter_entries(transcript):
             if entry.get("type") != "assistant":
                 continue
@@ -206,11 +222,14 @@ def _scan_subagents(path: Path) -> dict:
             if not usage:
                 continue
             key = response_id(entry)
-            if key in counted:
-                continue
-            counted.add(key)
+            seen = final.get(key)
+            if seen is None or (usage.get("output_tokens") or 0) >= (
+                seen[0].get("output_tokens") or 0
+            ):
+                final[key] = (usage, message.get("model"))
+
+        for usage, model in final.values():
             add_usage(tokens, usage)
-            model = message.get("model")
             if model:
                 add_usage(models.setdefault(model, empty_tokens()), usage)
 
@@ -227,13 +246,15 @@ def summarize(path: Path) -> dict | None:
 
     title = None
     name = None
+    model_id = None
+    cost_state = None
+    responses: dict[str, dict] = {}
     first_prompt = None
     last_prompt = None
     cwd = branch = version = entrypoint = None
     start = end = None
     user_msgs = assistant_msgs = tool_calls = thinking_turns = 0
     context_now = context_peak = 0
-    counted_responses: set[str] = set()
     active_seconds = 0.0
     previous_at = None
 
@@ -242,6 +263,16 @@ def summarize(path: Path) -> dict | None:
 
         if kind == "ai-title":
             title = entry.get("aiTitle") or title
+            continue
+        if kind == "cost-state":
+            # Claude Code's own accounting — authoritative when present.
+            cost_state = entry
+            continue
+        if kind == "attachment":
+            payload = entry.get("attachment") or {}
+            if payload.get("type") == "model":
+                # The only place the real model id lands, `[1m]` suffix and all.
+                model_id = (payload.get("identity") or {}).get("modelId") or model_id
             continue
         if kind in ("custom-title", "agent-name"):
             # `/rename` writes both. Unlike the live registry, which disappears
@@ -286,20 +317,21 @@ def summarize(path: Path) -> dict | None:
             model = message.get("model")
             usage = message.get("usage") or {}
 
-            first_block = response_id(entry) not in counted_responses
-            if first_block:
-                counted_responses.add(response_id(entry))
+            key = response_id(entry)
+            if key not in responses:
+                responses[key] = {"usage": None, "model": model, "day": day}
                 assistant_msgs += 1
                 if day:
                     daily[day]["messages"] += 1
 
             if usage:
-                if first_block:
-                    add_usage(tokens, usage)
-                    if model:
-                        add_usage(models.setdefault(model, empty_tokens()), usage)
-                    if day:
-                        daily[day]["output"] += usage.get("output_tokens") or 0
+                slot = responses[key]
+                previous = slot["usage"]
+                if previous is None or (usage.get("output_tokens") or 0) >= (
+                    previous.get("output_tokens") or 0
+                ):
+                    slot["usage"] = usage
+                    slot["model"] = model or slot["model"]
                 if not entry.get("isSidechain"):
                     size = context_size(usage)
                     if size:
@@ -320,16 +352,45 @@ def summarize(path: Path) -> dict | None:
     if start is None:
         return None
 
+    for slot in responses.values():
+        usage = slot["usage"]
+        if not usage:
+            continue
+        add_usage(tokens, usage)
+        if slot["model"]:
+            add_usage(models.setdefault(slot["model"], empty_tokens()), usage)
+        if slot["day"]:
+            daily[slot["day"]]["output"] += usage.get("output_tokens") or 0
+
     if day_keys := sorted(daily):
         daily[day_keys[0]]["sessions"] = 1
 
+    # cost-state is Claude Code's own ledger: exact model ids, real dollars, and
+    # subagent usage already folded in. Prefer it over our reconstruction.
+    cost_usd = None
+    token_source = "computed"
+    if cost_state:
+        usage_by_model = cost_state.get("modelUsage") or {}
+        if usage_by_model:
+            token_source = "cost-state"
+            cost_usd = cost_state.get("totalCostUSD")
+            tokens = empty_tokens()
+            models = {}
+            for model_name, counts in usage_by_model.items():
+                bucket = models.setdefault(model_name, empty_tokens())
+                for ours, theirs in _COST_STATE_KEYS.items():
+                    value = counts.get(theirs) or 0
+                    bucket[ours] += value
+                    tokens[ours] += value
+
     subagents = _scan_subagents(path)
-    for key in tokens:
-        tokens[key] += subagents["tokens"][key]
-    for model, counts in subagents["models"].items():
-        bucket = models.setdefault(model, empty_tokens())
-        for key in bucket:
-            bucket[key] += counts[key]
+    if token_source == "computed":
+        for key in tokens:
+            tokens[key] += subagents["tokens"][key]
+        for model, counts in subagents["models"].items():
+            bucket = models.setdefault(model, empty_tokens())
+            for key in bucket:
+                bucket[key] += counts[key]
 
     started = parse_ts(start)
     ended = parse_ts(end)
@@ -365,7 +426,13 @@ def summarize(path: Path) -> dict | None:
         "tokens": tokens,
         "contextTokens": context_now,
         "contextPeak": context_peak,
-        "contextLimit": LARGE_CONTEXT if context_peak > SMALL_CONTEXT else SMALL_CONTEXT,
+        "modelId": model_id,
+        "costUSD": cost_usd,
+        "tokenSource": token_source,
+        "contextLimit": (
+            context_limit_for([model_id, *models])
+            or (LARGE_CONTEXT if context_peak > SMALL_CONTEXT else SMALL_CONTEXT)
+        ),
         "subagents": subagents["count"],
         "subagentTypes": subagents["types"],
         "daily": daily,
@@ -651,11 +718,13 @@ def stats(sessions: list[dict], days: int = 30) -> dict:
 
         project = session.get("project") or "(unknown)"
         entry = projects.setdefault(
-            project, {"name": project, "sessions": 0, "messages": 0, "output": 0, "seconds": 0}
+            project,
+            {"name": project, "sessions": 0, "messages": 0, "output": 0, "cost": 0.0, "seconds": 0},
         )
         entry["sessions"] += 1
         entry["messages"] += session.get("userMsgs", 0) + session.get("assistantMsgs", 0)
         entry["output"] += session.get("tokens", {}).get("output", 0)
+        entry["cost"] += session.get("costUSD") or 0
         entry["seconds"] += session.get("activeSec", 0)
 
         branch = session.get("branch") or "(no branch)"
@@ -691,6 +760,8 @@ def stats(sessions: list[dict], days: int = 30) -> dict:
             "toolCalls": sum(s.get("toolCalls", 0) for s in sessions),
             "subagents": sum(s.get("subagents", 0) for s in sessions),
             "output": sum(s.get("tokens", {}).get("output", 0) for s in sessions),
+            "costUSD": sum(s.get("costUSD") or 0 for s in sessions),
+            "costed": sum(1 for s in sessions if s.get("costUSD") is not None),
             "bytes": sum(
                 s.get("sizeBytes", 0) for s in sessions if not s.get("archived")
             ),
