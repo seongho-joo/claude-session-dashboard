@@ -25,7 +25,7 @@ PROJECTS_DIR = CLAUDE_DIR / "projects"
 # it is durable data, not a cache — it does not belong under ~/.cache.
 STORE_PATH = Path.home() / ".local" / "share" / "cc-dashboard" / "index.json"
 LEGACY_CACHE_PATH = Path.home() / ".cache" / "cc-dashboard" / "index.json"
-CACHE_VERSION = 5
+CACHE_VERSION = 6
 
 LOCAL_TZ = ZoneInfo("Asia/Seoul")
 
@@ -33,8 +33,9 @@ LOCAL_TZ = ZoneInfo("Asia/Seoul")
 # not work — wall-clock duration counts overnight resumes, active time does not.
 ACTIVE_GAP_SECONDS = 300
 
-SMALL_CONTEXT = 200_000
-LARGE_CONTEXT = 1_000_000
+# Every model Claude Code runs here gets the 1M window; the model id only
+# sometimes carries a `[1m]` suffix, so it cannot be the signal.
+CONTEXT_LIMIT = 1_000_000
 
 _COST_STATE_KEYS = {
     "input": "inputTokens",
@@ -164,14 +165,6 @@ def response_id(entry: dict) -> str:
     """
     message = entry.get("message") or {}
     return message.get("id") or entry.get("requestId") or entry.get("uuid") or ""
-
-
-def context_limit_for(model_ids) -> int | None:
-    """1M only when a model id says so. `message.model` never carries `[1m]`."""
-    for model_id in model_ids:
-        if model_id and "[1m]" in model_id:
-            return LARGE_CONTEXT
-    return None
 
 
 def context_size(usage: dict) -> int:
@@ -429,10 +422,7 @@ def summarize(path: Path) -> dict | None:
         "modelId": model_id,
         "costUSD": cost_usd,
         "tokenSource": token_source,
-        "contextLimit": (
-            context_limit_for([model_id, *models])
-            or (LARGE_CONTEXT if context_peak > SMALL_CONTEXT else SMALL_CONTEXT)
-        ),
+        "contextLimit": CONTEXT_LIMIT,
         "subagents": subagents["count"],
         "subagentTypes": subagents["types"],
         "daily": daily,
@@ -476,6 +466,11 @@ def _load_store() -> dict:
         except (OSError, json.JSONDecodeError):
             continue
         files = stored.get("files", {})
+        # Archived summaries are never reparsed, so they keep whatever limit
+        # they were stored with; the window does not depend on the transcript.
+        for value in files.values():
+            if value.get("archived"):
+                value["contextLimit"] = CONTEXT_LIMIT
         if stored.get("version") == CACHE_VERSION:
             return files
         # Older layout. Live summaries are reparsed from their transcripts
