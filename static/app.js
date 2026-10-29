@@ -10,6 +10,9 @@ const state = {
   projects: [],
   mode: "filter",
   detailId: null,
+  heatKey: "messages",
+  heatDays: [],
+  activity: null,
 };
 
 /* ---------------- formatting ---------------- */
@@ -115,47 +118,98 @@ function areaChart(series, limit) {
   </svg>`;
 }
 
-function dailyChart(daily, key, label) {
-  if (!daily.length) return '<p class="hint">데이터가 없습니다.</p>';
+const HEAT_METRICS = {
+  messages: { label: "메시지", format: int },
+  output: { label: "출력 토큰", format: tokens },
+  sessions: { label: "세션", format: int },
+};
 
-  const W = 720;
-  const H = 150;
-  const pad = { top: 12, right: 12, bottom: 22, left: 52 };
-  const innerW = W - pad.left - pad.right;
-  const innerH = H - pad.top - pad.bottom;
+const ymd = (d) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
-  const top = Math.max(...daily.map((d) => d[key])) || 1;
-  const slot = innerW / daily.length;
-  const width = Math.max(2, slot - 3);
+// GitHub-style contribution grid: one column per week, Sunday on top, last 53 weeks.
+function heatmap(daily, key) {
+  const { label, format } = HEAT_METRICS[key];
+  const byDate = new Map(daily.map((d) => [d.date, d]));
 
-  const bars = daily
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const start = new Date(today);
+  start.setDate(start.getDate() - 52 * 7 - start.getDay());
+
+  const days = [];
+  for (const d = new Date(start); d <= today; d.setDate(d.getDate() + 1)) {
+    const counts = byDate.get(ymd(d)) || {};
+    days.push({ date: ymd(d), counts, value: counts[key] || 0, weekday: d.getDay(), month: d.getMonth() });
+  }
+
+  // Quartiles of the active days, so one huge day does not wash the rest out.
+  const active = days.map((d) => d.value).filter((v) => v > 0).sort((a, b) => a - b);
+  const q = [0.25, 0.5, 0.75].map((f) => active[Math.floor(f * (active.length - 1))] ?? 0);
+  const level = (v) => (v <= 0 ? 0 : v <= q[0] ? 1 : v <= q[1] ? 2 : v <= q[2] ? 3 : 4);
+
+  const CELL = 11;
+  const GAP = 3;
+  const STEP = CELL + GAP;
+  const left = 24;
+  const top = 16;
+  const weeks = Math.ceil(days.length / 7);
+  const W = left + weeks * STEP;
+  const H = top + 7 * STEP;
+
+  let lastMonth = -1;
+  const months = [];
+  const cells = days
     .map((d, i) => {
-      const height = (d[key] / top) * innerH;
-      const bx = pad.left + i * slot + (slot - width) / 2;
-      const by = pad.top + innerH - height;
-      const dim = i === daily.length - 1 ? "" : "";
-      return `<rect class="bar ${dim}" x="${bx.toFixed(1)}" y="${by.toFixed(1)}" width="${width.toFixed(1)}" height="${Math.max(1, height).toFixed(1)}" rx="1">
-        <title>${d.date} · ${int(d[key])} ${label}</title>
-      </rect>`;
+      const col = Math.floor(i / 7);
+      if (d.weekday === 0 && d.month !== lastMonth && col < weeks - 1) {
+        months.push({ col, name: `${d.month + 1}월` });
+        lastMonth = d.month;
+      }
+      return `<rect class="heat-cell l${level(d.value)}" data-day="${i}" x="${left + col * STEP}" y="${top + d.weekday * STEP}" width="${CELL}" height="${CELL}" rx="2"></rect>`;
     })
     .join("");
 
-  const step = Math.ceil(daily.length / 6);
-  const labels = daily
-    .map((d, i) =>
-      i % step === 0 || i === daily.length - 1
-        ? `<text x="${(pad.left + i * slot + slot / 2).toFixed(1)}" y="${H - 6}" text-anchor="middle">${d.date.slice(5)}</text>`
-        : ""
-    )
+  // A month that only clips the first column or two would collide with the next label.
+  const monthLabels = months
+    .filter((m, i) => !months[i + 1] || months[i + 1].col - m.col >= 3)
+    .map((m) => `<text x="${left + m.col * STEP}" y="10">${m.name}</text>`)
     .join("");
 
-  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="일별 ${label}">
-    <line class="grid" x1="${pad.left}" y1="${pad.top}" x2="${W - pad.right}" y2="${pad.top}"></line>
-    <text x="${pad.left - 8}" y="${pad.top + 3}" text-anchor="end">${tokens(top)}</text>
-    <line class="grid" x1="${pad.left}" y1="${pad.top + innerH}" x2="${W - pad.right}" y2="${pad.top + innerH}"></line>
-    <text x="${pad.left - 8}" y="${pad.top + innerH + 3}" text-anchor="end">0</text>
-    ${bars}${labels}
-  </svg>`;
+  const weekdays = [
+    [1, "월"],
+    [3, "수"],
+    [5, "금"],
+  ]
+    .map(([row, name]) => `<text x="0" y="${top + row * STEP + CELL - 2}">${name}</text>`)
+    .join("");
+
+  let longest = 0;
+  let run = 0;
+  for (const d of days) {
+    run = d.value > 0 ? run + 1 : 0;
+    longest = Math.max(longest, run);
+  }
+  let current = 0;
+  // Today still counts as part of the streak before any work lands on it.
+  for (let i = days.length - (days.at(-1).value > 0 ? 1 : 2); i >= 0 && days[i].value > 0; i--) current++;
+
+  state.heatDays = days;
+  const total = days.reduce((sum, d) => sum + d.value, 0);
+  const legend = [0, 1, 2, 3, 4]
+    .map((l) => `<svg width="${CELL}" height="${CELL}"><rect class="heat-cell l${l}" width="${CELL}" height="${CELL}" rx="2"></rect></svg>`)
+    .join("");
+
+  return `<div class="heatmap-scroll">
+      <svg class="heatmap" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="최근 1년 일별 ${label}">
+        ${monthLabels}${weekdays}${cells}
+      </svg>
+      <div class="heat-tip" id="heat-tip" hidden></div>
+    </div>
+    <div class="heatmap-foot">
+      <span class="hint">최근 1년 ${label} ${format(total)} · 활동한 날 ${int(active.length)}일 · 최장 연속 ${int(longest)}일 · 현재 연속 ${int(current)}일</span>
+      <span class="heatmap-legend hint">적음 ${legend} 많음</span>
+    </div>`;
 }
 
 function barList(rows, valueKey, format = int) {
@@ -419,7 +473,8 @@ function turnHtml(turn) {
 /* ---------------- activity ---------------- */
 
 async function loadActivity() {
-  const data = await api("/api/stats?days=45");
+  const data = await api("/api/stats?days=371");
+  state.activity = data;
   const t = data.totals;
 
   $("#activity-hint").textContent =
@@ -446,11 +501,16 @@ async function loadActivity() {
       )
       .join("")}</div>
 
-    <h2>일별 메시지</h2>
-    <div class="panel">${dailyChart(data.daily, "messages", "메시지")}</div>
-
-    <h2>일별 출력 토큰</h2>
-    <div class="panel">${dailyChart(data.daily, "output", "토큰")}</div>
+    <div class="heat-head">
+      <h2>일별 활동</h2>
+      <div class="seg" id="heat-metric">${Object.entries(HEAT_METRICS)
+        .map(
+          ([key, m]) =>
+            `<button data-heat="${key}" aria-pressed="${key === state.heatKey}">${esc(m.label)}</button>`
+        )
+        .join("")}</div>
+    </div>
+    <div class="panel" id="heat-panel">${heatmap(data.daily, state.heatKey)}</div>
 
     <div class="two-col">
       <div>
@@ -559,6 +619,43 @@ function bind() {
   );
 
   window.addEventListener("hashchange", route);
+
+  const WEEKDAYS = "일월화수목금토";
+  $("#activity-body").addEventListener("mouseover", (event) => {
+    const cell = event.target.closest("[data-day]");
+    const tip = $("#heat-tip");
+    if (!tip) return;
+    if (!cell) {
+      tip.hidden = true;
+      return;
+    }
+    const d = state.heatDays[Number(cell.dataset.day)];
+    const c = d.counts;
+    tip.innerHTML = `<strong>${d.date} (${WEEKDAYS[d.weekday]})</strong>
+      <span>메시지 ${int(c.messages)} · 세션 ${int(c.sessions)}</span>
+      <span>출력 토큰 ${tokens(c.output)} · 툴 ${int(c.tools)}</span>`;
+    tip.hidden = false;
+    // Fixed to the viewport so the scroll container cannot clip it.
+    const rect = cell.getBoundingClientRect();
+    const half = tip.offsetWidth / 2 + 8;
+    const x = Math.min(Math.max(rect.left + rect.width / 2, half), window.innerWidth - half);
+    tip.style.left = `${x}px`;
+    tip.style.top = `${rect.top - tip.offsetHeight - 6}px`;
+  });
+  $("#activity-body").addEventListener("mouseleave", () => {
+    const tip = $("#heat-tip");
+    if (tip) tip.hidden = true;
+  });
+
+  $("#activity-body").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-heat]");
+    if (!button || !state.activity) return;
+    state.heatKey = button.dataset.heat;
+    $$("#heat-metric [data-heat]").forEach((b) =>
+      b.setAttribute("aria-pressed", String(b.dataset.heat === state.heatKey))
+    );
+    $("#heat-panel").innerHTML = heatmap(state.activity.daily, state.heatKey);
+  });
 
   $("#back").addEventListener("click", () => {
     if (state.navigated) history.back();

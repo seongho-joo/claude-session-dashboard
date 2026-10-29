@@ -520,3 +520,26 @@ input[type="search"]:focus, select:focus { outline: 2px solid var(--accent); out
   .row { grid-template-columns: 1fr; grid-template-areas: "title" "meta" "right"; }
   .row-right { text-align: left; }
 }
+
+/* ---------------- activity heatmap ---------------- */
+
+.heat-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.heatmap-scroll { overflow-x: auto; }
+.heatmap { display: block; margin-left: auto; }
+.heatmap text { fill: var(--muted); font-size: 9px; font-family: var(--f-sans); }
+.heat-cell { stroke: color-mix(in srgb, var(--ink) 6%, transparent); stroke-width: 1; }
+.heat-cell.l0 { fill: var(--sunk); }
+.heat-cell.l1 { fill: color-mix(in srgb, var(--live) 30%, var(--sunk)); }
+.heat-cell.l2 { fill: color-mix(in srgb, var(--live) 55%, var(--sunk)); }
+.heat-cell.l3 { fill: color-mix(in srgb, var(--live) 78%, var(--sunk)); }
+.heat-cell.l4 { fill: var(--live); }
+.heatmap-foot { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
+.heatmap-legend { display: inline-flex; align-items: center; gap: 3px; }
+.heat-cell[data-day]:hover { stroke: var(--ink); stroke-width: 1.5; }
+.heat-tip {
+  position: fixed; transform: translateX(-50%); pointer-events: none; z-index: 2;
+  display: flex; flex-direction: column; gap: 1px; white-space: nowrap;
+  padding: 6px 9px; border-radius: 4px; font-size: 12px; line-height: 1.45;
+  background: var(--ink); color: var(--surface);
+}
+.heat-tip[hidden] { display: none; }
