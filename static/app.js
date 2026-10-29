@@ -509,6 +509,26 @@ function openTab(tab) {
   if (tab === "live") renderLive();
 }
 
+const SESSION_ROUTE = "session/";
+
+// Every navigation goes through the hash so the browser's back/forward buttons replay it.
+function navigate(hash) {
+  if (location.hash.slice(1) === hash) route();
+  else location.hash = hash;
+}
+
+function route() {
+  const hash = location.hash.slice(1);
+  if (hash.startsWith(SESSION_ROUTE)) {
+    openDetail(decodeURIComponent(hash.slice(SESSION_ROUTE.length)));
+    return;
+  }
+  const tab = TABS.includes(hash) ? hash : "live";
+  // Returning from a detail view keeps the already-loaded list and its scroll position.
+  if (tab === "sessions" && state.tab === "detail" && state.sessions.length) show(tab);
+  else openTab(tab);
+}
+
 function connectEvents() {
   const source = new EventSource("/events");
   const dot = $("#conn");
@@ -535,22 +555,22 @@ function connectEvents() {
 
 function bind() {
   $$(".tab").forEach((button) =>
-    button.addEventListener("click", () => openTab(button.dataset.tab))
+    button.addEventListener("click", () => navigate(button.dataset.tab))
   );
 
-  window.addEventListener("hashchange", () => {
-    const tab = location.hash.slice(1);
-    if (TABS.includes(tab) && tab !== state.tab) openTab(tab);
-  });
+  window.addEventListener("hashchange", route);
 
   $("#back").addEventListener("click", () => {
-    show("sessions");
-    if (!state.sessions.length) loadSessions();
+    if (state.navigated) history.back();
+    else navigate("sessions");
   });
 
   document.addEventListener("click", (event) => {
     const target = event.target.closest("[data-session]");
-    if (target) openDetail(target.dataset.session);
+    if (target) {
+      state.navigated = true;
+      navigate(SESSION_ROUTE + encodeURIComponent(target.dataset.session));
+    }
   });
 
   const modeFilter = $("#mode-filter");
@@ -588,7 +608,8 @@ async function boot() {
   bind();
 
   const initial = location.hash.slice(1);
-  show(TABS.includes(initial) ? initial : "live");
+  if (initial.startsWith(SESSION_ROUTE)) route();
+  else show(TABS.includes(initial) ? initial : "live");
 
   try {
     const live = await api("/api/live");
